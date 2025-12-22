@@ -1,4 +1,4 @@
-```md
+
 ![Corporate Spend Analytics](https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>/blob/main/assets/cover-corporate-spend.jpg)
 
 # Corporate Spend Analytics Pipeline — Airflow + PySpark + Postgres + Power BI
@@ -54,8 +54,6 @@ The portfolio focus is not only spend reporting, but also **Risk & Early Warning
 ---
 
 ## Architecture
-
-```
 
 ```
           +-------------------+
@@ -331,3 +329,4 @@ All data used is assumed to be **public / non-sensitive**, and the pipeline is n
 
 ```
 ```
+
