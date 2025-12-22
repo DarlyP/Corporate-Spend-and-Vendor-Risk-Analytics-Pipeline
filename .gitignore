@@ -1,0 +1,18 @@
+# data
+data/
+airflow/logs/
+General/
+.metadata/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.env.local
+
+# airflow
+airflow/*.db
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,139 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: corp_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airflow} -d ${POSTGRES_DB:-airflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data:/data
+
+  airflow-init:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow_init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment: &airflow_env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      # supaya "airflow users create" tersedia (FAB auth manager)
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+
+      # PENTING di Airflow 3: scheduler butuh tahu execution API server
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+
+      # Wajib di Airflow 3 (kalau kosong, api-server bisa error)
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-dev_jwt_secret_change_me}
+
+      # Batasi parallelism biar laptop aman
+      AIRFLOW__CORE__PARALLELISM: "8"
+
+      # dataset url
+      DATASET_CSV_URL: ${DATASET_CSV_URL}
+
+    volumes: &airflow_vols
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+      - ./spark_job:/opt/airflow/spark_jobs
+      - ./sql:/opt/airflow/sql
+      - ./loader:/opt/airflow/loader
+
+    command: >
+      bash -c "
+        airflow db migrate &&
+        (airflow users create --username ${AIRFLOW_ADMIN_USER:-admin} --firstname Admin --lastname User --role Admin --email admin@example.com --password ${AIRFLOW_ADMIN_PASSWORD:-admin} || true)
+      "
+
+  airflow-api-server:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow_api_server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment: *airflow_env
+    ports:
+      - "8080:8080"
+    volumes: *airflow_vols
+    command: airflow api-server --host 0.0.0.0 --port 8080
+
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_started
+    env_file:
+      - .env
+    environment: *airflow_env
+    volumes: *airflow_vols
+    command: airflow scheduler
+
+  airflow-dag-processor:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow_dag_processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_started
+    env_file:
+      - .env
+    environment: *airflow_env
+    volumes: *airflow_vols
+    command: airflow dag-processor
+
+  airflow-triggerer:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow_triggerer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_started
+    env_file:
+      - .env
+    environment: *airflow_env
+    volumes: *airflow_vols
+    command: airflow triggerer
+
+volumes:
+  postgres_data:
+    name: corp_postgres_data
+
