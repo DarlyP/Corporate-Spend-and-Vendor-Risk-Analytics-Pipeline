@@ -1,7 +1,7 @@
 
 ![Corporate Spend Analytics](https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>/blob/main/assets/cover-corporate-spend.jpg)
 
-# Corporate Spend Analytics Pipeline — Airflow + PySpark + Postgres + Power BI
+# Corporate Spend and Vendor Risk Analytics Pipeline
 
 ---
 
@@ -18,22 +18,17 @@
 
 ## Data Source
 
-This project is designed to ingest **any public corporate spend CSV** (configurable using `DATASET_CSV_URL` in `.env`).  
-➡️ Replace this with your dataset link when publishing your repo:
-- **Dataset Link**: `https://...`
+[<img src="https://img.shields.io/badge/DC%20Open%20Data-E41E2B?style=for-the-badge&logoColor=white" alt="DC Open Data" />](https://opendata.dc.gov/datasets/92842dceac234b9ca1a8266fcfd57de7_50/explore)
 
 ---
 
 ## Dashboard
 
-**Power BI Report (PBIX)**  
-- Put your `.pbix` file in: `powerbi/CorporateSpendAnalytics.pbix`
-- Power BI connects to Postgres **BI views** (`bi.*`) for reporting.
+**Power BI Dashboard** :  
+[Dashboard – Corporate Spend and Vendor Risk Analytics Pipeline](https://drive.google.com/file/d/1oxTfJwkk38d9CfD9S0ei3hF81WgmrNTL/view?usp=sharing)
 
-**Recommended Pages**
-1. **Executive Overview** (Spend trend, KPI cards, Top vendors)
-2. **Agency / Department View** (Category spend by agency)
-3. **Risk & Anomaly** (Outliers + new vendors + risk score)
+**Presentation Deck (PDF)** :  
+[Presentation – Corporate Spend and Vendor Risk Analytics Pipeline](https://drive.google.com/file/d/19Ha13SNwivKvhx_6bm8f1IBAjTSW0-Il/view?usp=sharing)
 
 ---
 
@@ -464,6 +459,7 @@ This pipeline converts raw transactions into a consistent monitoring system:
 
 This project is for **learning and portfolio purposes** only.
 All data used is assumed to be **public / non-sensitive**, and the pipeline is not intended for real production financial decisioning without additional controls, validation, and governance.
+
 
 
 
