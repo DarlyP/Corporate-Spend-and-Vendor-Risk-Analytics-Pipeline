@@ -1,5 +1,5 @@
 
-![Corporate Spend Analytics](https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>/blob/main/assets/cover-corporate-spend.jpg)
+![Corporate Spend Analytics](https://github.com/DarlyP/Corporate-Spend-and-Vendor-Risk-Analytics-Pipeline/blob/main/Risk%20wallpaper.jpg)
 
 # Corporate Spend and Vendor Risk Analytics Pipeline
 
@@ -459,6 +459,7 @@ This pipeline converts raw transactions into a consistent monitoring system:
 
 This project is for **learning and portfolio purposes** only.
 All data used is assumed to be **public / non-sensitive**, and the pipeline is not intended for real production financial decisioning without additional controls, validation, and governance.
+
 
 
 
