@@ -53,222 +53,68 @@ The portfolio focus is not only spend reporting, but also **Risk & Early Warning
 
 ---
 
-## Architecture
+## Business Context
 
-```
-          +-------------------+
-          |  Source CSV (URL) |
-          +---------+---------+
-                    |
-                    v
+Corporate spending data often comes from multiple sources with inconsistent formats (different column names, date formats, vendor naming). As transaction volume grows, it becomes difficult for Finance, Procurement, and Audit teams to quickly answer:
 
-+-------------------+-------------------+
-| BRONZE (raw CSV files in /data/bronze)|
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------+-------------------+
-| SILVER (clean parquet + csv exports)   |
-| - spend_clean.parquet                 |
-| - spend_clean_csv/                    |
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------+-------------------+
-| GOLD (aggregates + anomaly tables)    |
-| - vendor_monthly_spend                |
-| - agency_category_spend               |
-| - transaction_anomaly                 |
-| - vendor_risk_scores                  |
-+-------------------+-------------------+
-                    |
-                    v
-+-------------------+-------------------+
-| POSTGRES serving layer                |
-| schemas: stage -> corp -> bi          |
-| BI connects to bi.* views             |
-+---------------------------------------+
+- How much are we spending month-to-month, and where is it going?
+- Which vendors dominate spend (vendor concentration risk)?
+- Which agencies/departments are overspending and in which categories?
+- Are there unusual transactions (outliers) or risky vendor patterns that need investigation?
 
-````
-
-
-## Pipeline Steps (Big Picture)
-
-### Step 1 — Setup (Docker + Airflow + Postgres)
-- Start services with Docker Compose
-- Postgres stores Airflow metadata **and** analytics serving layer (schemas `stage/corp/bi`)
-
-### Step 2 — Bronze (Ingest raw CSV)
-- Download / ingest CSV into: `data/bronze/*.csv`
-
-### Step 3 — Silver (Clean + Standardize) — PySpark
-- Standardize column names
-- Clean numeric amount
-- Robust date parsing
-- Add engineered features:
-  - `year`, `month`, `yyyymm`, `is_weekend`, `amount_bucket`, `category_group`
-- Output:
-  - `data/silver/spend_clean.parquet`
-  - `data/silver/spend_clean_csv/`
-
-### Step 4 — Gold (Aggregates + Risk Flags) — PySpark
-From Silver parquet, build:
-- **Vendor monthly spend** (txn_count, total_spend, avg_spend)
-- **Agency x Category spend**
-- **Transaction anomaly** table (outliers + new vendor month flags)
-
-Output:
-- `data/gold/vendor_monthly_spend_*`
-- `data/gold/agency_category_spend_*`
-- `data/gold/transaction_anomaly_*`
-
-### Step 5 — Postgres Serving Layer (SQL + DBeaver)
-- Create schemas & tables (stage/corp/bi)
-- Load CSV exports into `stage.*`
-- Transform into star schema `corp.*`
-- Publish Power BI friendly views in `bi.*`
-
-### Step 6 — Risk Scoring (Explainable)
-Example scoring:
-- `risk_score = 70*is_outlier + 30*is_new_vendor`
-Aggregated per vendor-month:
-- `corp.vendor_risk_scores`
-- `bi.v_vendor_risk_scores`
-
-### Step 7 — Power BI Dashboard
-Power BI connects to Postgres **views**:
-- `bi.v_vendor_monthly_spend`
-- `bi.v_agency_category_spend`
-- `bi.v_transaction_anomaly`
-- `bi.v_vendor_risk_scores`
-- `bi.v_exec_kpi`
-- `bi.v_dim_date` + `bi.v_dim_month`
+This project solves that by building an automated pipeline plus a BI-ready serving layer.
 
 ---
 
-## Postgres Serving Layer Design (Recommended)
+## Deliverables
 
-### Schemas
-- `stage` = raw landing tables (loaded from CSV exports)
-- `corp` = cleaned star schema (dimensions + facts + gold tables)
-- `bi` = reporting views (stable contract for Power BI)
-
-### Key BI Views
-- `bi.v_vendor_monthly_spend`
-- `bi.v_agency_category_spend`
-- `bi.v_transaction_anomaly`
-- `bi.v_vendor_risk_scores`
-- `bi.v_exec_kpi` *(monthly KPI summary)*
-- `bi.v_dim_date` *(daily calendar)*
-- `bi.v_dim_month` *(unique yyyymm calendar — IMPORTANT for monthly relationships)*
-
-✅ **Why `v_dim_month` matters?**  
-Power BI requires the “1-side” key to be unique.  
-`v_dim_date` is daily → `yyyymm` repeats many times → cannot be the 1-side for a monthly relationship.  
-So:
-- Use `v_dim_date[date]` to relate to `transaction_date`
-- Use `v_dim_month[yyyymm]` to relate to monthly tables (`yyyymm`)
+- **Automated data pipeline** (Airflow + PySpark) producing:
+  - **Bronze**: raw CSV landing
+  - **Silver**: cleaned & standardized transactions (Parquet + CSV)
+  - **Gold**: aggregates + anomaly detection outputs (Parquet + CSV)
+- **PostgreSQL Serving Layer**:
+  - `stage` schema for raw loads
+  - `corp` schema for curated fact/dim + gold tables
+  - `bi` schema for Power BI views (star-schema friendly)
+- **Power BI Dashboard** (Executive + Agency/Category + Risk & Anomaly)
+- **Risk Scoring** module (simple, explainable scoring)
 
 ---
 
-## Power BI Data Model (Recommended)
+## Architecture Overview
 
-### Relationships
-1. `bi.v_dim_date[date]` (1) → (many) `bi.v_transaction_anomaly[transaction_date]`
-2. `bi.v_dim_month[yyyymm]` (1) → (many)  
-   - `bi.v_vendor_monthly_spend[yyyymm]`  
-   - `bi.v_agency_category_spend[yyyymm]`  
-   - `bi.v_vendor_risk_scores[yyyymm]`  
-   - `bi.v_exec_kpi[yyyymm]`
+**Data Flow**
+1. Raw dataset lands in `data/bronze/` (CSV)
+2. PySpark cleans/transforms → `data/silver/` (Parquet + CSV folder)
+3. PySpark aggregates/anomaly flags → `data/gold/` (Parquet + CSV folder)
+4. CSV outputs loaded into Postgres `stage.*` tables
+5. SQL transforms stage → `corp.*` curated tables + `bi.*` views
+6. Power BI connects to Postgres and reads from `bi.*` views
 
-### Measures (Examples)
-```DAX
-Total Spend = SUM(bi_v_vendor_monthly_spend[total_spend])
-Total Txn   = SUM(bi_v_vendor_monthly_spend[txn_count])
-Active Vendors = SUM(bi_v_exec_kpi[active_vendors])
-Outlier Txn = SUM(bi_v_exec_kpi[outlier_txn])
-````
-
----
-
-## How To Run
-
-### 1) Start services
-
-```bash
-docker compose up -d --build
-```
-
-### 2) Run Airflow pipelines
-
-* Open Airflow UI: `http://localhost:8080`
-* Trigger DAGs in order:
-
-  1. Bronze ingest DAG (if you have it)
-  2. `corporate_spend_silver_dag`
-  3. `corporate_spend_gold_dag`
-
-### 3) Load to Postgres + create BI views (DBeaver)
-
-* Connect DBeaver:
-
-  * Host: `localhost`
-  * Port: `5432`
-  * DB: `airflow`
-  * User: `airflow`
-  * Password: `airflow` *(or from `.env`)*
-
-Run SQL scripts (recommended order):
-
-1. `sql/00_serving_layer.sql` (schemas + stage/corp tables + bi views)
-2. `sql/01_load_corp_from_stage.sql` (insert dim/fact/gold from stage)
-3. `sql/02_risk_score.sql` (populate vendor risk scores)
-4. `sql/03_indexes.sql` (indexes)
-
-### 4) Power BI
-
-* Get Data → PostgreSQL
-* Select **Import** (recommended) or DirectQuery
-* Load tables/views from schema `bi`
-* Build visuals
+**Tools**
+- Orchestration: **Apache Airflow**
+- Processing: **PySpark**
+- Serving layer: **PostgreSQL**
+- SQL client: **DBeaver**
+- BI: **Power BI**
 
 ---
 
-## Persistence Note (IMPORTANT)
-
-If you run:
-
-```bash
-docker compose down -v
-```
-
-Docker will remove volumes including `postgres_data` → your Postgres schemas/tables/views will be deleted.
-
-✅ To keep Postgres data, use:
-
-```bash
-docker compose down
-```
-
-or just restart Docker / laptop and run:
-
-```bash
-docker compose up -d
-```
-
----
-
-## Folder Structure
+## Repository Structure
 
 ```
 .
 ├── airflow/
 │   ├── dags/
-│   ├── logs/
-│   └── Dockerfile
+│   │   ├── corporate_spend_silver_dag.py
+│   │   ├── corporate_spend_gold_dag.py
+│   │   └── (optional) corporate_spend_risk_dag.py
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── spark_job/
 │   ├── clean_transform.py
-│   └── build_aggregates.py
+│   ├── build_aggregates.py
+│   └── (optional) build_risk_scores.py
 ├── data/
 │   ├── bronze/
 │   ├── silver/
@@ -276,49 +122,341 @@ docker compose up -d
 ├── sql/
 │   ├── 00_serving_layer.sql
 │   ├── 01_load_corp_from_stage.sql
-│   ├── 02_risk_score.sql
+│   ├── 02_bi_views.sql   (optional if separated)
 │   └── 03_indexes.sql
-└── powerbi/
-    └── CorporateSpendAnalytics.pbix
+├── docker-compose.yml
+└── README.md
+````
+
+---
+
+## Setup & Run
+
+### Prerequisites
+
+* Docker + Docker Compose
+* Power BI Desktop (Windows)
+* DBeaver (optional but recommended)
+
+### Start the stack
+
+```bash
+docker compose up -d --build
 ```
 
----
+### Persistence Note (IMPORTANT)
 
-## Conclusion
+* Your Postgres data persists via Docker volume: `postgres_data`.
+* If you run:
 
-This repository demonstrates a realistic analytics workflow:
+```bash
+docker compose down -v
+```
 
-* **Reliable orchestration** (Airflow)
-* **Scalable transformation** (Spark)
-* **Enterprise serving layer** (Postgres: stage → corp → bi)
-* **Business-ready BI** (Power BI executive + risk views)
+it **deletes the volume**, so all tables/views disappear.
+Use instead:
 
-The key portfolio differentiator is the **Risk & Anomaly layer**, showing how spend analytics can be used as **early warning signals** for:
+```bash
+docker compose down
+```
 
-* suspicious transactions,
-* abnormal spend patterns,
-* and vendor onboarding risks.
-
----
-
-## Limitations
-
-* Outlier detection is intentionally simple (mean + 3*std) and should be improved for production (robust stats / quantiles).
-* Risk score is explainable but not a predictive model (no supervised learning here).
-* Dataset schema may vary across sources; the pipeline assumes a minimum set of required columns.
+if you want to stop containers without losing data.
 
 ---
 
-## What’s Next
+## Pipeline Steps (Bronze → Silver → Gold)
 
-* Add **time-based monitoring** (monthly drift, outlier trend)
-* Add **more anomaly rules**:
+### Step 1 — Bronze (Raw Landing)
 
-  * weekend high-spend
-  * sudden vendor spend spikes
-  * agency budget threshold alerts
-* Optional: deploy dashboards via **Power BI Service** and publish link
-* Add **data quality metrics** table + dashboard page
+Place raw CSV files in:
+
+```text
+data/bronze/*.csv
+```
+
+### Step 2 — Silver (Clean & Standardize) — `clean_transform.py`
+
+The Silver job:
+
+* Reads all bronze CSVs
+* Standardizes column names across datasets (transaction_id, vendor, agency, date, amount)
+* Cleans numeric amount (`$`, commas)
+* Parses multiple datetime formats robustly
+* Adds engineered fields:
+
+  * `year`, `month`, `yyyymm`
+  * `day_of_week`, `is_weekend`
+  * `amount_bucket`
+  * `category_group` (simple text-based mapping)
+* Deduplicates by `transaction_id`
+* Writes:
+
+  * `data/silver/spend_clean.parquet`
+  * `data/silver/spend_clean_csv/part-*.csv`
+
+Run via Airflow DAG:
+
+* `corporate_spend_silver_dag` → task `spark_clean_transform_silver`
+
+### Step 3 — Gold (Aggregates + Flags) — `build_aggregates.py`
+
+Gold job creates BI-friendly outputs:
+
+1. **Vendor Monthly Spend**
+
+   * `txn_count`, `total_spend`, `avg_spend`
+2. **Agency × Category Spend**
+
+   * monthly spend breakdown by agency & category_group
+3. **Transaction Anomaly Table**
+
+   * `is_outlier`: outlier rule (example: amount > mean + 3*std by category)
+   * `is_new_vendor_month`: first month vendor appears
+
+Writes:
+
+* Parquet outputs under `data/gold/`
+* CSV folders:
+
+  * `data/gold/vendor_monthly_spend_csv/`
+  * `data/gold/agency_category_spend_csv/`
+  * `data/gold/transaction_anomaly_csv/`
+
+Run via Airflow DAG:
+
+* `corporate_spend_gold_dag` → task `spark_build_aggregates_gold`
+
+### Step 4 — Risk Scoring (Explainable)
+
+Risk scoring is designed to be simple and interview-friendly:
+
+Example:
+
+* `risk_score = 70*is_outlier + 30*is_new_vendor_month`
+
+You can implement:
+
+* Option A: a dedicated Spark job + DAG writing `vendor_risk_scores_csv`
+* Option B: compute in SQL in Postgres (recommended for BI serving)
+
+---
+
+## PostgreSQL Serving Layer (DBeaver / SQL)
+
+### Schemas
+
+* `stage`: raw imported outputs (landing tables from CSV)
+* `corp`: curated fact/dim + gold tables
+* `bi`: Power BI views (clean, stable interface)
+
+### Create schemas/tables/views
+
+Run:
+
+* `sql/00_serving_layer.sql`
+  This creates:
+* `stage.*` raw tables
+* `corp.*` curated tables
+* `bi.*` views
+
+### Load CSV outputs into `stage.*`
+
+Load the Gold/Silver CSV folders into Postgres staging tables:
+
+* `stage.silver_spend_clean_raw`
+* `stage.gold_vendor_monthly_raw`
+* `stage.gold_agency_category_raw`
+* `stage.gold_anomaly_raw`
+
+(You can use DBeaver Import, or `COPY` if you mount files to the Postgres container.)
+
+### Transform stage → corp (curated)
+
+Run:
+
+* `sql/01_load_corp_from_stage.sql` (recommended)
+  This step:
+* Upserts dimension tables `corp.dim_agency`, `corp.dim_vendor`
+* Loads/refreshes fact table `corp.fact_transactions_clean`
+* Loads gold tables `corp.vendor_monthly_spend`, `corp.agency_category_spend`, `corp.transaction_anomaly`
+* Builds `corp.vendor_risk_scores`
+
+### Performance indexes
+
+Run:
+
+* `sql/03_indexes.sql`
+
+### BI Views (Power BI reads only these)
+
+Key views (bi schema):
+
+* `bi.v_dim_date` (daily date table)
+* `bi.v_dim_month` (monthly date table)
+* `bi.v_exec_kpi` (monthly KPI summary)
+* `bi.v_vendor_monthly_spend`
+* `bi.v_agency_category_spend`
+* `bi.v_transaction_anomaly`
+* `bi.v_vendor_risk_scores`
+
+---
+
+## Power BI Setup
+
+### Connect to Postgres
+
+**Get Data → PostgreSQL**
+
+* Host: `localhost`
+* Port: `5432`
+* Database: `airflow` (or your POSTGRES_DB)
+* Username/Password: from `.env` or docker-compose defaults
+
+### Load data
+
+Load the **BI views** only (recommended):
+
+* `bi.v_dim_date`
+* `bi.v_dim_month`
+* `bi.v_exec_kpi`
+* `bi.v_vendor_monthly_spend`
+* `bi.v_agency_category_spend`
+* `bi.v_transaction_anomaly`
+* `bi.v_vendor_risk_scores`
+
+> Note: You may choose “Import” mode for speed. DirectQuery is possible but requires more tuning.
+
+---
+
+## Power BI Data Model (Star Schema + Measures)
+
+### Why relationships matter
+
+Correct relationships prevent:
+
+* double counting KPIs,
+* inconsistent slicer behavior,
+* visuals not syncing.
+
+### Relationship rules used here
+
+**Monthly tables must join to a monthly dimension**
+You should NOT use `bi.v_dim_date[yyyymm]` as the “1” side because `v_dim_date` is **daily**, meaning `yyyymm` repeats many times per month.
+
+**Solution**
+
+* Use `bi.v_dim_month[yyyymm]` for monthly joins (unique key per month)
+* Use `bi.v_dim_date[date]` for daily joins (unique per day)
+
+### Recommended Relationships
+
+**dim_month → monthly tables**
+
+* `bi.v_dim_month[yyyymm] (1)` → `bi.v_exec_kpi[yyyymm] (*)`
+* `bi.v_dim_month[yyyymm] (1)` → `bi.v_vendor_monthly_spend[yyyymm] (*)`
+* `bi.v_dim_month[yyyymm] (1)` → `bi.v_agency_category_spend[yyyymm] (*)`
+* `bi.v_dim_month[yyyymm] (1)` → `bi.v_vendor_risk_scores[yyyymm] (*)`
+
+**dim_date → anomaly table**
+
+* `bi.v_dim_date[date] (1)` → `bi.v_transaction_anomaly[transaction_date] (*)`
+
+**Relationship Settings**
+
+* Cardinality: **One-to-many (1:*)**
+* Cross-filter direction: **Single**
+* Active: **Yes**
+
+---
+
+## DAX Measures (Global KPIs)
+
+Create measures in Power BI (example uses `bi_v_exec_kpi` table name as imported):
+
+```DAX
+Total Spend = SUM('bi_v_exec_kpi'[total_spend])
+
+Total Txn = SUM('bi_v_exec_kpi'[txn_count])
+
+Active Vendors = SUM('bi_v_exec_kpi'[active_vendors])
+
+Outlier Txn = SUM('bi_v_exec_kpi'[outlier_txn])
+
+New Vendor Txn = SUM('bi_v_exec_kpi'[new_vendor_txn])
+
+Flagged Txn = [Outlier Txn] + [New Vendor Txn]
+
+Avg Spend / Txn = DIVIDE([Total Spend], [Total Txn])
+```
+
+These measures act as **global KPI definitions** that every visual can reuse consistently.
+
+---
+
+## Business Value & Impact
+
+This pipeline converts raw transactions into a consistent monitoring system:
+
+* **Faster visibility** into spend and vendor exposure
+* **Early warning** for unusual transactions (outliers + new vendor activity)
+* **Targeted audit** and better prioritization (risk-based ranking)
+* **Procurement leverage**: understand vendor concentration and spend patterns
+
+---
+
+## Limitations & What’s Next
+
+### Limitations
+
+* Vendor normalization is basic (uppercase + trim; still potential duplicates).
+* Outlier detection uses simple rules (mean + 3*std), may be sensitive to skew.
+* Loading into Postgres is not fully incremental (depends on current load strategy).
+* DQ monitoring/alerts are minimal.
+
+### Next Improvements
+
+* Add stronger vendor dedup logic (fuzzy matching + vendor_key).
+* Use percentile-based outliers (P95/P99) per category/vendor.
+* Implement incremental loads and upserts by partition (`yyyymm`).
+* Add data quality thresholds + alerts (row count, null %, duplicates).
+* Add drill-through vendor detail pages and tooltips in Power BI.
+
+---
+
+## How to Reproduce End-to-End
+
+1. Start services:
+
+   ```bash
+   docker compose up -d --build
+   ```
+2. Put raw CSV into `data/bronze/`
+3. Run Airflow DAGs:
+
+   * `corporate_spend_silver_dag`
+   * `corporate_spend_gold_dag`
+4. Load CSV outputs into Postgres `stage.*`
+5. Run SQL:
+
+   * `00_serving_layer.sql`
+   * `01_load_corp_from_stage.sql`
+   * `03_indexes.sql`
+6. Open Power BI:
+
+   * connect to Postgres
+   * load `bi.*` views
+   * set relationships + add measures
+   * build visuals
+
+---
+
+## Notes
+
+* **Do not run** `docker compose down -v` unless you intentionally want to wipe database storage.
+* Power BI relationships:
+
+  * monthly tables must join to **dim_month**
+  * anomaly must join to **dim_date**
 
 ---
 
@@ -327,6 +465,6 @@ The key portfolio differentiator is the **Risk & Anomaly layer**, showing how sp
 This project is for **learning and portfolio purposes** only.
 All data used is assumed to be **public / non-sensitive**, and the pipeline is not intended for real production financial decisioning without additional controls, validation, and governance.
 
-```
-```
+
+
 
